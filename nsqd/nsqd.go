@@ -48,7 +48,7 @@ type NSQD struct {
 	opts atomic.Value
 
 	dl        *dirlock.DirLock
-	isLoading int32
+	isLoading int32 // 是否在加载 metadata 文件
 	isExiting int32
 	errValue  atomic.Value
 	startTime time.Time
@@ -144,11 +144,14 @@ func New(opts *Options) (*NSQD, error) {
 	n.logf(LOG_INFO, version.String("nsqd"))
 	n.logf(LOG_INFO, "ID: %d", opts.ID)
 
-	n.tcpServer = &tcpServer{nsqd: n}
-	n.tcpListener, err = net.Listen(util.TypeOfAddr(opts.TCPAddress), opts.TCPAddress)
-	if err != nil {
-		return nil, fmt.Errorf("listen (%s) failed - %s", opts.TCPAddress, err)
+	{ // 这俩是一对，后面会一起传给 TcpServer 函数
+		n.tcpServer = &tcpServer{nsqd: n}
+		n.tcpListener, err = net.Listen(util.TypeOfAddr(opts.TCPAddress), opts.TCPAddress)
+		if err != nil {
+			return nil, fmt.Errorf("listen (%s) failed - %s", opts.TCPAddress, err)
+		}
 	}
+
 	if opts.HTTPAddress != "" {
 		n.httpListener, err = net.Listen(util.TypeOfAddr(opts.HTTPAddress), opts.HTTPAddress)
 		if err != nil {
@@ -250,6 +253,7 @@ func (n *NSQD) GetStartTime() time.Time {
 	return n.startTime
 }
 
+// Main 启动多个 goroutine，任意 goroutine 退出都会导致 Main 函数返回
 func (n *NSQD) Main() error {
 	exitCh := make(chan error)
 	var once sync.Once
@@ -335,6 +339,8 @@ func writeSyncFile(fn string, data []byte) error {
 	return err
 }
 
+// LoadMetadata 从某个 nsqd.dat 文件中加载 meta 信息，如果不存在对应文件则跳过，
+// 如果存在则根据里面的内容来创建 topic、channel，并启动对应的 topic
 func (n *NSQD) LoadMetadata() error {
 	atomic.StoreInt32(&n.isLoading, 1)
 	defer atomic.StoreInt32(&n.isLoading, 0)

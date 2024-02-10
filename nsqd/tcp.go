@@ -23,6 +23,8 @@ type tcpServer struct {
 	conns sync.Map
 }
 
+// Handle 先解析 conn 发送的前 4 个字节，看是否是 V2 版本，如果不是就返回错误，
+// 如果是 V2 版本的协议，创建出对应的 client 并调用 IOLoop 函数阻塞
 func (p *tcpServer) Handle(conn net.Conn) {
 	p.nsqd.logf(LOG_INFO, "TCP: new client(%s)", conn.RemoteAddr())
 

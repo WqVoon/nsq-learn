@@ -27,6 +27,7 @@ var separatorBytes = []byte(" ")
 var heartbeatBytes = []byte("_heartbeat_")
 var okBytes = []byte("OK")
 
+// v2 版本的协议
 type protocolV2 struct {
 	nsqd *NSQD
 }
@@ -36,6 +37,7 @@ func (p *protocolV2) NewClient(conn net.Conn) protocol.Client {
 	return newClientV2(clientID, conn, p.nsqd)
 }
 
+// IOLoop 从连接中不断获取命令，调用 p.Exec 去进一步解析执行
 func (p *protocolV2) IOLoop(c protocol.Client) error {
 	var err error
 	var line []byte
@@ -121,6 +123,7 @@ func (p *protocolV2) IOLoop(c protocol.Client) error {
 	return err
 }
 
+// SendMessage 用 frameTypeMessage 调用 p.Send，不会被 flush
 func (p *protocolV2) SendMessage(client *clientV2, msg *Message) error {
 	p.nsqd.logf(LOG_DEBUG, "PROTOCOL(V2): writing msg(%s) to client(%s) - %s", msg.ID, client, msg.Body)
 
@@ -166,36 +169,52 @@ func (p *protocolV2) Send(client *clientV2, frameType int32, data []byte) error 
 }
 
 func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
+	// 根据 payload 填充 client 中的字段，执行第一次时发往 IdentifyEventChan 的结构会被 messagePump 接收
+	// 后面发的内容不会被 messagePump 接收，只会改变 client 中的字段
 	if bytes.Equal(params[0], []byte("IDENTIFY")) {
 		return p.IDENTIFY(client, params)
 	}
+
+	// 如果开启了 TLS，那么禁止纯 tcp 发送命令
 	err := enforceTLSPolicy(client, p, params[0])
 	if err != nil {
 		return nil, err
 	}
+
 	switch {
-	case bytes.Equal(params[0], []byte("FIN")):
+	case bytes.Equal(params[0], []byte("FIN")): // 从 in-flight 队列里删除 msgID 对应的消息
 		return p.FIN(client, params)
-	case bytes.Equal(params[0], []byte("RDY")):
+
+	case bytes.Equal(params[0], []byte("RDY")): // 发送当前能处理的消息数量，in-flight 状态的消息数量不会大于这个值
 		return p.RDY(client, params)
-	case bytes.Equal(params[0], []byte("REQ")):
+
+	case bytes.Equal(params[0], []byte("REQ")): // 重新入队，可以增加参数来放入 defer 队列
 		return p.REQ(client, params)
-	case bytes.Equal(params[0], []byte("PUB")):
+
+	case bytes.Equal(params[0], []byte("PUB")): // 发布一条消息，如果 topic 不存在就创建它
 		return p.PUB(client, params)
-	case bytes.Equal(params[0], []byte("MPUB")):
+
+	case bytes.Equal(params[0], []byte("MPUB")): // 向同一个 topic 中发布多条消息，如果 topic 不存在就创建它
 		return p.MPUB(client, params)
-	case bytes.Equal(params[0], []byte("DPUB")):
+
+	case bytes.Equal(params[0], []byte("DPUB")): // 发送一个延迟消息
 		return p.DPUB(client, params)
-	case bytes.Equal(params[0], []byte("NOP")):
+
+	case bytes.Equal(params[0], []byte("NOP")): // 啥也不干
 		return p.NOP(client, params)
-	case bytes.Equal(params[0], []byte("TOUCH")):
+
+	case bytes.Equal(params[0], []byte("TOUCH")): // 给 in-flight 的消息续期
 		return p.TOUCH(client, params)
-	case bytes.Equal(params[0], []byte("SUB")):
+
+	case bytes.Equal(params[0], []byte("SUB")): // 将当前 client 与某个 channel 绑定，使其可以从 channel 中接收消息
 		return p.SUB(client, params)
-	case bytes.Equal(params[0], []byte("CLS")):
+
+	case bytes.Equal(params[0], []byte("CLS")): // 设置成 closing 状态，且将 RDY 设置为 0
 		return p.CLS(client, params)
+
 	case bytes.Equal(params[0], []byte("AUTH")):
 		return p.AUTH(client, params)
+
 	}
 	return nil, protocol.NewFatalClientErr(nil, "E_INVALID", fmt.Sprintf("invalid command %s", params[0]))
 }
@@ -270,11 +289,11 @@ func (p *protocolV2) messagePump(client *clientV2, startedChan chan bool) {
 				goto exit
 			}
 			flushed = true
-		case <-client.ReadyStateChan:
-		case subChannel = <-subEventChan:
+		case <-client.ReadyStateChan: // 这里只需要结束阻塞返回到 for-loop 的开始处，就有机会判断 IsReadyForMessages 是否已更新
+		case subChannel = <-subEventChan: // 所以一个 tcp 连接就只能订阅一个 topic & channel
 			// you can't SUB anymore
 			subEventChan = nil
-		case identifyData := <-identifyEventChan:
+		case identifyData := <-identifyEventChan: // 一个 tcp 连接就只能验证一次身份
 			// you can't IDENTIFY anymore
 			identifyEventChan = nil
 

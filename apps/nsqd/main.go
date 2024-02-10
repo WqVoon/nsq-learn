@@ -13,6 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/judwhite/go-svc"
 	"github.com/mreiferson/go-options"
+
 	"github.com/nsqio/nsq/internal/lg"
 	"github.com/nsqio/nsq/internal/version"
 	"github.com/nsqio/nsq/nsqd"

@@ -34,6 +34,7 @@ func SendResponse(w io.Writer, data []byte) (int, error) {
 
 // SendFramedResponse is a server side utility function to prefix data with a length header
 // and frame header and write to the supplied Writer
+// 格式是 `size | frameType | data`，其中 size = 4 + len(data)
 func SendFramedResponse(w io.Writer, frameType int32, data []byte) (int, error) {
 	beBuf := make([]byte, 4)
 	size := uint32(len(data)) + 4

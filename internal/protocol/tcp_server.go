@@ -14,6 +14,7 @@ type TCPHandler interface {
 	Handle(net.Conn)
 }
 
+// TCPServer 用入参的 handler 处理每一个 tcp 请求
 func TCPServer(listener net.Listener, handler TCPHandler, logf lg.AppLogFunc) error {
 	logf(lg.INFO, "TCP: listening on %s", listener.Addr())
 
@@ -26,7 +27,7 @@ func TCPServer(listener net.Listener, handler TCPHandler, logf lg.AppLogFunc) er
 			// this is a hack to avoid a staticcheck error
 			if te, ok := err.(interface{ Temporary() bool }); ok && te.Temporary() {
 				logf(lg.WARN, "temporary Accept() failure - %s", err)
-				runtime.Gosched()
+				runtime.Gosched() // 这个很有意思，出短期问题时调用 runtime.Gosched 切走
 				continue
 			}
 			// theres no direct way to detect this error because it is not exposed
@@ -36,6 +37,7 @@ func TCPServer(listener net.Listener, handler TCPHandler, logf lg.AppLogFunc) er
 			break
 		}
 
+		// 每一个连接都对应一个 goroutine，没有用 goroutine 池
 		wg.Add(1)
 		go func() {
 			handler.Handle(clientConn)

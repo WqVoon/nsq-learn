@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+
 	"github.com/nsqio/nsq/internal/auth"
 )
 
@@ -167,7 +168,7 @@ type clientV2 struct {
 	SampleRate int32
 
 	IdentifyEventChan chan identifyEvent
-	SubEventChan      chan *Channel
+	SubEventChan      chan *Channel // 发送 SUB 命令后会向里面写入值
 
 	TLS     int32
 	Snappy  int32

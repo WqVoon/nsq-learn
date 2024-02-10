@@ -1,0 +1,7 @@
+log_level = "debug"
+
+broadcast_address = "localhost"
+data_path = "/Users/bytedance/learn/nsq/storage"
+
+tcp_address = "localhost:4150"
+http_address = "localhost:4151"

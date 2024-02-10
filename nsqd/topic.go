@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nsqio/go-diskqueue"
+
 	"github.com/nsqio/nsq/internal/lg"
 	"github.com/nsqio/nsq/internal/quantile"
 	"github.com/nsqio/nsq/internal/util"
@@ -22,11 +23,11 @@ type Topic struct {
 
 	name              string
 	channelMap        map[string]*Channel
-	backend           BackendQueue
+	backend           BackendQueue // 磁盘队列
 	memoryMsgChan     chan *Message
-	startChan         chan int
+	startChan         chan int // 调用 Start 后会向其中传输数据，从而启动 messagePump
 	exitChan          chan int
-	channelUpdateChan chan int
+	channelUpdateChan chan int // 增删 channel 时会写入数据
 	waitGroup         util.WaitGroupWrapper
 	exitFlag          int32
 	idFactory         *guidFactory
@@ -56,7 +57,7 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 		deleteCallback:    deleteCallback,
 		idFactory:         NewGUIDFactory(nsqd.getOpts().ID),
 	}
-	if strings.HasSuffix(topicName, "#ephemeral") {
+	if strings.HasSuffix(topicName, "#ephemeral") || strings.HasSuffix(topicName, "test") { // 加一条方便测试
 		t.ephemeral = true
 		t.backend = newDummyBackendQueue()
 	} else {
@@ -78,11 +79,12 @@ func NewTopic(topicName string, nsqd *NSQD, deleteCallback func(*Topic)) *Topic 
 
 	t.waitGroup.Wrap(t.messagePump)
 
-	t.nsqd.Notify(t, !t.ephemeral)
+	t.nsqd.Notify(t, !t.ephemeral) // 向 notifyChan 里发消息，发成功时向 metadata 中写入当前的 topic 信息
 
 	return t
 }
 
+// Start 可重复调用
 func (t *Topic) Start() {
 	select {
 	case t.startChan <- 1:
@@ -217,6 +219,7 @@ func (t *Topic) PutMessages(msgs []*Message) error {
 	return nil
 }
 
+// 优先向 memoryMsgChan 中写入消息，写满了就向 backend 里写
 func (t *Topic) put(m *Message) error {
 	// If mem-queue-size == 0, avoid memory chan, for more consistent ordering,
 	// but try to use memory chan for deferred messages (they lose deferred timer
@@ -280,6 +283,7 @@ func (t *Topic) messagePump() {
 	// main message loop
 	for {
 		select {
+		// msg 是无序的，所以具体从 memoryMsgChan 还是 backendChan 取内容也是不确定的
 		case msg = <-memoryMsgChan:
 		case buf = <-backendChan:
 			msg, err = decodeMessage(buf)
@@ -294,7 +298,7 @@ func (t *Topic) messagePump() {
 				chans = append(chans, c)
 			}
 			t.RUnlock()
-			if len(chans) == 0 || t.IsPaused() {
+			if len(chans) == 0 || t.IsPaused() { // 通过将 memoryMsgChan 和 backendChan 设置成 nil 来永远阻塞
 				memoryMsgChan = nil
 				backendChan = nil
 			} else {
